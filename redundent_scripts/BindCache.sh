@@ -1,5 +1,7 @@
 #!/system/bin/sh
 # 2010-08-05 Firerat, bind mount cache to sd ext partition, and mount mtdblock4 for Clockwork recovery's use
+# 2011-12-20 Firerat, get the device block for cache from /proc/mtd instead of assuming it to be mtdblock4
+cachemtd=$( awk '/"cache"/ { sub(/mtd/,"/dev/block/mtdblock"); print $1 }' /proc/mtd )
 busybox umount /cache
 # Bind mount /sd-ext/cache ( or /system/sd/cache ) to /cache
 if [ "`busybox egrep -q "sd-ext|/system/sd" /proc/mounts;echo $?`" = "0" ];
@@ -27,7 +29,7 @@ fi
 
 if [ "`grep -q \"/dev/cache\" /proc/mounts;echo $?`" != "0" ];
 then
-    busybox mount -t yaffs2 -o nosuid,nodev /dev/block/mtdblock4 /dev/cache
+    busybox mount -t yaffs2 -o nosuid,nodev $cachemtd /dev/cache
 fi
 if [ ! -d /dev/cache/recovery ];
 then
