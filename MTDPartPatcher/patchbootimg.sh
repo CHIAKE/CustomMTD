@@ -86,9 +86,11 @@ else
         eval EndHex=\$${partition}EndHex
         eval Sizebytes=`expr $(printf %d $EndHex) - $(printf %d $StartHex)`
         eval ${partition}SizeMBytes=`echo |awk '{printf "%.3f", '$Sizebytes' / 1048576}'`
+        # TODO meh, maybe I move this later
         eval SizeMB=\$${partition}SizeMBytes
-        partition=`echo $partition|sed s/user//`
-        echo|awk '{printf "%s%s%s%-9s%s%9.3f %s","Orig_","'$partition'","Size=","'$partition'","=",'$SizeMB',"MB\n"}' >> $logfile
+#        partition=`echo $partition|sed s/user//`
+#        echo|awk '{printf "%s%s%s%-9s%s%9.3f %s","Orig_","'$partition'","Size=","'$partition'","=",'$SizeMB',"MB\n"}' >> $logfile
+        reportpartsize Orig $SizeMB $partition
     done
     SCD_Total=`echo|awk '{printf "%g",'$systemSizeMBytes' + '$cacheSizeMBytes' + '$userdataSizeMBytes' }'`
     for partition in `cat $dmesgmtdpart|awk '!/'$exclude'/ {print $1}'`;do
@@ -112,7 +114,7 @@ if [ ! -e $config ];
 then
     writeconfig
 fi
-if [ "`awk -Fconfigversion\= '$0 = $2' $config|awk '$0 = $1'`" -lt "159" ];
+if [ "`awk -Fconfigversion\= '$0 = $2' $config|awk '$0 = $1'`" -lt "160" ];
 then
     cp $config `dirname ${config}`/`basename $config .txt`-`date +%Y-%m-%d-%H%S-%Z`.txt
     writeconfig
@@ -162,7 +164,7 @@ echo "# CustomMTD config" > $config
 echo "# This file should be saved as plain text" > $config
 echo "# " > $config
 echo "# please *do not* edit configversion!" >> $config
-echo "configversion=159" >> $config
+echo "configversion=160" >> $config
 echo "#####" >> $config
 echo "systemMB=$systemSizeMBytes # system size in mb ( increments of 0.125 mb )" >> $config
 echo "cacheMB=$cacheSizeMBytes # cache size in mb ( increments of 0.125 mb )" >> $config
@@ -176,6 +178,9 @@ echo "# yeap, you figured it out, 8 = 1024k ( or 1 mb )" >> $config
 echo "# NOTE, depending on your recovery version you may see slightly more" >> $config
 echo "# free space in the ROM, as its yaffs2 tends to be more efficient with space" >> $config
 echo "mindatasize=50 # don't patch recovery if data size will be less than this" >> $config
+echo "alwaysreportused_system=false # forces partition mounting to report free space" >> $config
+echo "alwaysreportused_cache=false # forces partition mounting to report free space" >> $config
+echo "alwaysreportused_data=false # forces partition mounting to report free space" >> $config
 echo "#####" >> $config
 SPL=`awk -Fandroidboot.bootloader= '$0 = $2' /proc/cmdline|awk '$0 = $1'`
 SpoofedSPL=`awk -Fandroidboot.bootloader= '$0 = $3' /proc/cmdline|awk '$0 = $1'`
@@ -257,12 +262,7 @@ for partition in `cat $dmesgmtdpart|awk '{print $1}'`;do
     buildCMDline="${buildCMDline}${CL},"
 done
 KCMDline="`echo $buildCMDline|sed s/,\$//`"
-
-for MTDPart in system cache data;do
-    eval SizeKB=\$${MTDPart}SizeKBytes
-    eval SizeMB=`echo|awk '{printf "%.3f",'$SizeKB'/1024}'`
-    echo|awk '{printf "%s%s%s%-9s%s%9.3f %s","New_","'$MTDPart'","Size=","'$MTDPart'","=",'$SizeMB',"MB\n"}' >> $logfile
-done
+reportpartsize New
 return
 }
 
@@ -273,13 +273,39 @@ if [ "$KCMDline" = "mtdparts" ];
 then
     KCMDline=""
 fi
-    for MTDPart in system cache userdata;do
+reportpartsize New
+return
+}
+
+reportpartsize ()
+{
+if [ "$#" = "3" ];
+then
+    Tag=$1
+    SizeMB=$2
+    MTDPart=$3
+elif [ "$#" = "1" ];
+then
+    Tag=$1
+fi
+
+for MTDPart in system cache userdata;do
+    if [ "$boot" != "recovery" ];
+    then
         SizeMB=$(printf %d `awk '/'${MTDPart}'/ {print "0x"$2}' $mtdpart`|awk '{printf "%.3f", $1 / 1048576}')
+    else
         MTDPart=`echo $MTDPart|sed s/user//`
-        mount /$MTDPart
-        MTDPartfree=`df -h /$MTDPart|awk '/'$MTDPart'$/ {print $4}'`
-        echo|awk '{printf "%s%s%s%-9s%s%9.3f %s %8s%s","New_","'$MTDPart'","Size=","'$MTDPart'","=",'$SizeMB',"MB","'$MTDPartfree'","\n"}' >> $logfile
-    done
+        eval SizeKB=\$${MTDPart}SizeKBytes
+        eval SizeMB=`echo|awk '{printf "%.3f",'$SizeKB'/1024}'`
+    fi
+    MTDPart=`echo $MTDPart|sed s/user//`
+    if [ "$alwaysreportused_$MTDPart" = "true" ];
+    then
+        mount /$MTDPart 2> /dev/null
+    fi
+    MTDPartused=`df -h /$MTDPart|awk '/'$MTDPart'$/ {print $3}'`
+    echo|awk '{printf "%s%s%s%-9s%s%9.3f %s %8s%s","'${Tag}'_","'$MTDPart'","Size=","'$MTDPart'","=",'$SizeMB',"MB","'$MTDPartused'","\n"}' >> $logfile
+done
 return
 }
 
@@ -324,11 +350,7 @@ echo "Mode=remove" >> $logfile
 dumpimg
 KCMDline=""
 flashimg
-for MTDPart in system cache userdata;do
-    SizeMB=$(printf %d `awk '/'${MTDPart}'/ {print "0x"$2}' $mtdpart`|awk '{printf "%.3f", $1 / 1048576}')
-    MTDPart=`echo $MTDPart|sed s/user//`
-    echo|awk '{printf "%s%s%s%-9s%s%9.3f %s","Orig_","'$MTDPart'","Size=","'$MTDPart'","=",'$SizeMB',"MB\n"}' >> $logfile
-done
+reportpartsize Orig
 echo "success=true" >> $logfile
 exit
 }
@@ -427,7 +449,7 @@ DoTestRun ()
 {
 $dmesg > $sdcard/cMTD-testoutput.txt
 busybox sed s/serialno=.*\ a/serialno=XXXXXXXXXX\ a/g -i $sdcard/cMTD-testoutput.txt
-sh -x $me recovery testrun $3 >> $sdcard/cMTD-testoutput.txt 2>&1
+sh -x $me recovery testrun $dmesgfile >> $sdcard/cMTD-testoutput.txt 2>&1
 sed -e '/+ echo #/ d' $sdcard/cMTD-testoutput.txt -i
 busybox unix2dos $sdcard/cMTD-testoutput.txt
 exit
@@ -457,6 +479,7 @@ config=$sdcard/mtdpartmap.txt
 mtdpart=/proc/mtd
 dmesgmtdpart=/dev/mtdpartmap
 logfile=$wkdir/cMTD.log
+dmesgfile=""
 dmesg=dmesg
 if [ "$#" = "3" ];
 then
@@ -469,7 +492,8 @@ then
     mtdpart=`pwd`/mtd
     dmesgmtdpart=`pwd`/mtdpartmap
     logfile=$wkdir/cMTD.log
-    dmesg="cat $3"
+    dmesgfile=$3
+    dmesg="cat $dmesgfile"
 fi
 if [ -e $logfile ];
 then
