@@ -12,7 +12,16 @@ version=1.5.9-Beta2
 
 readdmesg ()
 {
-$dmesg|awk '/0x.+: "/ {sub(/-/," ");gsub(/"/,"");gsub(/0x0*/,"");printf $6" 0x"toupper ($3)" 0x"toupper ($4)"\n"}' > $dmesgmtdpart
+$dmesg | awk '/0x.*-0x.*:.*"$/ \
+{ for(i=1; i <= NF; i++)
+    if ( $i ~ /^0x/)
+       { $i = toupper($i)
+         gsub(/0X0+0/,"0x",$i)
+         sub(/-/," ",$i)
+         gsub(/\"/,"",$NF)
+         printf "%s %s",$NF,$i"\n"
+       }
+}' > $dmesgmtdpart
 
 # need a sanity check, what if recovery had been running for ages and the dmesg buffer had been filled?
 for sanity in misc recovery boot system cache userdata;do
